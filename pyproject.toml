@@ -1,0 +1,27 @@
+[project]
+name = "openags-agents"
+version = "0.0.1"
+description = "Agents"
+authors = [
+    { name="OPENAGS", email="pengsong.zhang@mail.utoronto.ca" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+dependencies = [
+    "pydantic>=2.0",
+    "litellm",
+    "pyyaml",
+    "requests",  # Added requests dependency
+    "numpy"  # Added numpy dependency
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/openags-agents"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
