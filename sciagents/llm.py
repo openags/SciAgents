@@ -7,7 +7,6 @@ class LlmConfig(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
-    # 其他默认参数（例如 temperature、max_tokens 等）也可以在这里定义
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
 
@@ -24,105 +23,125 @@ class LlmModel:
             config: LlmConfig object with model name and optional parameters.
         """
         config_dict = config.dict(exclude_unset=True)
-        self.model = config_dict.pop("model")  # 单独取出 model
-        self.config = config_dict   
+        self.model = config_dict.pop("model")
+        self.config = config_dict
 
-    def completion(self, messages: List[Dict]) -> str:
+    def completion(self, messages: List[Dict], tools: Optional[List[Dict]] = None) -> Dict:
         """
         Perform a non-streaming model call.
 
         Args:
             messages: List of message dictionaries in OpenAI format.
+            tools: Optional list of tool schemas in OpenAI format.
 
         Returns:
-            str: Complete model response.
+            Dict: Complete model response.
 
         Raises:
             ValueError: If model call fails.
         """
         try:
+            kwargs = self.config.copy()
+            if tools:
+                kwargs["tools"] = tools
             response = completion(
                 model=self.model,
                 messages=messages,
                 stream=False,
-                **self.config
+                **kwargs
             )
-            return response.choices[0].message.content
+            return response.choices[0].message
         except Exception as e:
             raise ValueError(f"LLM completion failed: {e}")
 
-    def stream_completion(self, messages: List[Dict]) -> Generator:
+    def stream_completion(self, messages: List[Dict], tools: Optional[List[Dict]] = None) -> Generator:
         """
         Perform a streaming model call.
 
         Args:
             messages: List of message dictionaries in OpenAI format.
+            tools: Optional list of tool schemas in OpenAI format.
 
         Returns:
-            Generator: Yields content chunks as they are received.
+            Generator: Yields content (str) or tool call deltas (List[Dict]).
 
         Raises:
             ValueError: If model call fails.
         """
         try:
+            kwargs = self.config.copy()
+            if tools:
+                kwargs["tools"] = tools
             response = completion(
                 model=self.model,
                 messages=messages,
                 stream=True,
-                **self.config
+                **kwargs
             )
             for chunk in response:
-                content = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
-                yield content
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                elif chunk.choices[0].delta.tool_calls:
+                    yield chunk.choices[0].delta.tool_calls
         except Exception as e:
             raise ValueError(f"LLM stream completion failed: {e}")
 
-    async def async_completion(self, messages: List[Dict]) -> str:
+    async def async_completion(self, messages: List[Dict], tools: Optional[List[Dict]] = None) -> Dict:
         """
         Perform an asynchronous non-streaming model call.
 
         Args:
             messages: List of message dictionaries in OpenAI format.
+            tools: Optional list of tool schemas in OpenAI format.
 
         Returns:
-            str: Complete model response.
+            Dict: Complete model response.
 
         Raises:
             ValueError: If model call fails.
         """
         try:
+            kwargs = self.config.copy()
+            if tools:
+                kwargs["tools"] = tools
             response = await acompletion(
                 model=self.model,
                 messages=messages,
                 stream=False,
-                **self.config
+                **kwargs
             )
-            return response.choices[0].message.content
+            return response.choices[0].message
         except Exception as e:
             raise ValueError(f"LLM async completion failed: {e}")
 
-    async def async_stream_completion(self, messages: List[Dict]) -> AsyncGenerator:
+    async def async_stream_completion(self, messages: List[Dict], tools: Optional[List[Dict]] = None) -> AsyncGenerator:
         """
         Perform an asynchronous streaming model call.
 
         Args:
             messages: List of message dictionaries in OpenAI format.
+            tools: Optional list of tool schemas in OpenAI format.
 
         Returns:
-            AsyncGenerator: Yields content chunks as they are received.
+            AsyncGenerator: Yields content (str) or tool call deltas (List[Dict]).
 
         Raises:
             ValueError: If model call fails.
         """
         try:
+            kwargs = self.config.copy()
+            if tools:
+                kwargs["tools"] = tools
             response = await acompletion(
                 model=self.model,
                 messages=messages,
                 stream=True,
-                **self.config
+                **kwargs
             )
             async for chunk in response:
-                content = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
-                yield content
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+                elif chunk.choices[0].delta.tool_calls:
+                    yield chunk.choices[0].delta.tool_calls
         except Exception as e:
             raise ValueError(f"LLM async stream completion failed: {e}")

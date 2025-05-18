@@ -1,0 +1,8 @@
+agents:
+
+  ChatAgent:
+    model: "deepseek/deepseek-chat"
+    api_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    url: "https://api.deepseek.com"
+    model_config_dict:  # Additional model configuration
+      temperature: 0.7

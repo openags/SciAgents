@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Union, Generator, AsyncGenerator, Awaitable
 from abc import ABC, abstractmethod
-from src.llm import LlmModel, LlmConfig
-from src.agents.message import AgentInput, AgentOutput
+from sciagents.llm import LlmModel, LlmConfig
+from sciagents.agents.message import AgentInput, AgentOutput
 
 class Agent(ABC):
     """

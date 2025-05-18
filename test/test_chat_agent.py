@@ -3,8 +3,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import yaml
-from src.agents.chat_agent import ChatAgent
-from src.agents.message import AgentInput, Message, Role
+from sciagents.agents.chat_agent import ChatAgent
+from sciagents.agents.message import AgentInput, Message, Role
 
 
 # 读取配置文件
@@ -36,7 +36,6 @@ agent = ChatAgent(
 
 print("Agent Name:", agent.name)
 
-# 调用step, stream=True
 # 调用step, stream=True
 output = agent.step(agent_input)
 if hasattr(output.content, "__iter__") and not isinstance(output.content, str):

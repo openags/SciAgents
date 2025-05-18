@@ -1,5 +1,5 @@
 [project]
-name = "openags-agents"
+name = "sciagents"
 version = "0.0.1"
 description = "Agents"
 authors = [
@@ -17,11 +17,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/openags-agents"
+Homepage = "https://github.com/yourusername/sciagents"
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["sciagents"]
