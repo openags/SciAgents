@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/sciagents"
+Homepage = "https://github.com/openags/SciAgents"
 
 [build-system]
 requires = ["setuptools>=61.0"]
