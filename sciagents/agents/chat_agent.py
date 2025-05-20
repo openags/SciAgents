@@ -13,17 +13,16 @@ class ChatAgent(Agent):
     Uses LlmModel from llm.py for LLM interactions.
     """
 
-    def __init__(self, name: str, llm_config: Union[LlmConfig, Dict[str, Any]], stream: bool = False, tools: Optional[List[Union[Callable, FunctionTool]]] = None) -> None:
+    def __init__(self, name: str, llm_config: Union[LlmConfig, Dict[str, Any]], tools: Optional[List[Union[Callable, FunctionTool]]] = None) -> None:
         """
         Initialize the chat agent.
 
         Args:
             name: Name of the agent.
             llm_config: LlmConfig instance or dict with model configuration.
-            stream: Whether to enable streaming output, defaults to False.
             tools: List of functions or FunctionTool instances.
         """
-        super().__init__(name, llm_config, stream)
+        super().__init__(name, llm_config)
         self.history: List[Dict] = []
         self.tools: List[FunctionTool] = []
         self.tool_map: Dict[str, FunctionTool] = {}
@@ -35,7 +34,7 @@ class ChatAgent(Agent):
                     self.tools.append(FunctionTool(tool))
                 self.tool_map[tool.name if isinstance(tool, FunctionTool) else tool.__name__] = self.tools[-1]
 
-    def run(self, input_data: Union[AgentInput, List[Dict]], *args: Any, **kwargs: Any) -> AgentOutput:
+    def run(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Run the agent with the given input, equivalent to a single step.
         """
@@ -47,7 +46,7 @@ class ChatAgent(Agent):
         """
         self.history = []
 
-    def step(self, input_data: Union[AgentInput, List[Dict]], *args: Any, **kwargs: Any) -> AgentOutput:
+    def step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step, handling tool calls and streaming.
         """
@@ -55,14 +54,14 @@ class ChatAgent(Agent):
         self.history.extend(messages)
 
         tool_schemas = [tool.to_openai_schema() for tool in self.tools] if self.tools else None
-        if self.stream:
+        if stream:
             generator = self.llm_model.stream_completion(self.history, tools=tool_schemas)
             return self._handle_streaming(generator)
         else:
             response = self.llm_model.completion(self.history, tools=tool_schemas)
             return self._handle_response(response)
 
-    async def a_step(self, input_data: Union[AgentInput, List[Dict]], *args: Any, **kwargs: Any) -> AgentOutput:
+    async def a_step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step asynchronously, handling tool calls and streaming.
         """
@@ -70,7 +69,7 @@ class ChatAgent(Agent):
         self.history.extend(messages)
 
         tool_schemas = [tool.to_openai_schema() for tool in self.tools] if self.tools else None
-        if self.stream:
+        if stream:
             generator = self.llm_model.async_stream_completion(self.history, tools=tool_schemas)
             return await self._handle_async_streaming(generator)
         else:
