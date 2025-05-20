@@ -42,7 +42,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
+    def step(self, input_data: Union[AgentInput, List[Dict], str], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step of the agent's operation.
 
@@ -57,7 +57,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    async def a_step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
+    async def a_step(self, input_data: Union[AgentInput, List[Dict], str], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step of the agent's operation asynchronously.
 

@@ -46,11 +46,21 @@ class ChatAgent(Agent):
         """
         self.history = []
 
-    def step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
+    def step(self, input_data: Union[AgentInput, List[Dict], str], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step, handling tool calls and streaming.
         """
-        messages = input_data.to_dict_list() if isinstance(input_data, AgentInput) else input_data
+        if isinstance(input_data, str):
+            # Convert string to proper message format
+            messages = [{
+                "role": "user",
+                "content": input_data,
+            }]
+        elif isinstance(input_data, AgentInput):
+            messages = input_data.to_dict_list()
+        else:
+            messages = input_data        
+            
         self.history.extend(messages)
 
         tool_schemas = [tool.to_openai_schema() for tool in self.tools] if self.tools else None
@@ -61,11 +71,21 @@ class ChatAgent(Agent):
             response = self.llm_model.completion(self.history, tools=tool_schemas)
             return self._handle_response(response)
 
-    async def a_step(self, input_data: Union[AgentInput, List[Dict]], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
+    async def a_step(self, input_data: Union[AgentInput, List[Dict], str], stream: bool = False, *args: Any, **kwargs: Any) -> AgentOutput:
         """
         Perform a single step asynchronously, handling tool calls and streaming.
         """
-        messages = input_data.to_dict_list() if isinstance(input_data, AgentInput) else input_data
+        if isinstance(input_data, str):
+            # Convert string to proper message format
+            messages = [{
+                "role": "user",
+                "content": input_data,
+            }]
+        elif isinstance(input_data, AgentInput):
+            messages = input_data.to_dict_list()
+        else:
+            messages = input_data        
+
         self.history.extend(messages)
 
         tool_schemas = [tool.to_openai_schema() for tool in self.tools] if self.tools else None
