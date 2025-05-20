@@ -1,6 +1,6 @@
 [project]
 name = "sciagents"
-version = "0.0.2"
+version = "0.0.3"
 description = "Agents"
 authors = [
     { name="OPENAGS", email="pengsong.zhang@mail.utoronto.ca" }
