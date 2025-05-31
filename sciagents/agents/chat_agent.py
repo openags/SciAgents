@@ -1,9 +1,9 @@
 import json
 from typing import Callable, List, Dict, Optional, Union, Any, Generator, AsyncGenerator
 from sciagents.agents.agent import Agent
-from sciagents.agents.message import AgentInput, AgentOutput, Message
+from sciagents.agents.message import AgentInput, AgentOutput, Message, Role
 from sciagents.llm import LlmModel, LlmConfig
-from sciagents.tools import FunctionTool, function_tool
+from sciagents.tools.function_tool import FunctionTool, function_tool
 import asyncio
 import time
 
@@ -116,8 +116,10 @@ class ChatAgent(Agent):
                             final_tool_calls[index].function.arguments += tool_call.function.arguments
 
             if final_tool_calls:
-                yield "[Executing tools...]\n"
-                tool_call_results = self._execute_tool_calls(list(final_tool_calls.values()))
+                tool_names = [getattr(tc.function, 'name', None) or (tc.function.get('name') if isinstance(tc.function, dict) else str(tc.function)) for tc in final_tool_calls.values()]
+                tool_names_str = ', '.join([name for name in tool_names if name])
+                yield f"[Executing tools: {tool_names_str}]\n"
+                tool_call_results = self._execute_tool(list(final_tool_calls.values()))
                 self.history.append({"role": "assistant", "tool_calls": list(final_tool_calls.values())})
                 self.history.extend(tool_call_results)
 
@@ -167,8 +169,10 @@ class ChatAgent(Agent):
 
             if final_tool_calls:
 
-                yield "[Executing tools...]\n"
-                tool_call_results = await self._aexecute_tool_calls(list(final_tool_calls.values()))
+                tool_names = [getattr(tc.function, 'name', None) or (tc.function.get('name') if isinstance(tc.function, dict) else str(tc.function)) for tc in final_tool_calls.values()]
+                tool_names_str = ', '.join([name for name in tool_names if name])
+                yield f"[Executing tools: {tool_names_str}]\n"
+                tool_call_results = await self._aexecute_tool(list(final_tool_calls.values()))
                 self.history.append({"role": "assistant", "tool_calls": list(final_tool_calls.values())})
                 self.history.extend(tool_call_results)
 
@@ -205,7 +209,7 @@ class ChatAgent(Agent):
         """
         if response.get("tool_calls"):
             self.history.append({"role": "assistant", "tool_calls": response["tool_calls"]})
-            tool_call_results = self._execute_tool_calls(response["tool_calls"])
+            tool_call_results = self._execute_tool(response["tool_calls"])
             self.history.extend(tool_call_results)
             final_response = self.llm_model.completion(self.history)
             if final_response.get("tool_calls"):
@@ -225,7 +229,7 @@ class ChatAgent(Agent):
         """
         if response.get("tool_calls"):
             self.history.append({"role": "assistant", "tool_calls": response["tool_calls"]})
-            tool_call_results = await self._aexecute_tool_calls(response["tool_calls"])
+            tool_call_results = await self._aexecute_tool(response["tool_calls"])
             self.history.extend(tool_call_results)
             final_response = await self.llm_model.async_completion(self.history)
             if final_response.get("tool_calls"):
@@ -239,10 +243,10 @@ class ChatAgent(Agent):
         self.history.append({"role": "assistant", "content": content})
         return AgentOutput.from_string(content)
 
-    def _execute_tool_calls(self, tool_calls: List[Any]) -> List[Dict]:
+    def _execute_tool(self, tool_calls: List[Any]) -> List[Dict]:
         """
         Execute tool calls synchronously with parameter validation and error handling.
-        Aggregates fragmented tool call arguments.
+        Returns a list of Message dicts with only: tool_call_id, role, name, content.
         """
         results = []
         for tool_call in tool_calls:
@@ -252,17 +256,15 @@ class ChatAgent(Agent):
                 arguments = json.loads(arguments_str) if arguments_str else {}
                 tool = self.tool_map.get(tool_name)
                 if not tool:
-                    results.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": f"Tool {tool_name} not found",
-                        "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                    })
+                    msg = Message(
+                        role=Role.TOOL,
+                        content=f"Tool {tool_name} not found",
+                        tool_call_id=tool_call.id,
+                        name=tool_name
+                    )
+                    results.append(msg.to_dict())
                     continue
-                start_time = time.time()
-                # Use sync execution for sync tools, async for async tools
                 if asyncio.iscoroutinefunction(tool.func):
-                    # Create a new event loop for async tools
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
@@ -271,39 +273,43 @@ class ChatAgent(Agent):
                         loop.close()
                 else:
                     result = tool.func(**arguments)
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": str(result),
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=str(result),
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except json.JSONDecodeError:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Invalid arguments JSON: {arguments_str}",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Invalid arguments JSON: {arguments_str}",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except asyncio.TimeoutError:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Tool execution timed out after 10 seconds",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Tool execution timed out after 10 seconds",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except Exception as e:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Tool execution failed: {str(e)}",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Tool execution failed: {str(e)}",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
         return results
 
-    async def _aexecute_tool_calls(self, tool_calls: List[Any]) -> List[Dict]:
+    async def _aexecute_tool(self, tool_calls: List[Any]) -> List[Dict]:
         """
         Execute tool calls asynchronously with parameter validation and error handling.
-        Aggregates fragmented tool call arguments.
+        Returns a list of Message dicts with only: tool_call_id, role, name, content.
         """
         results = []
         for tool_call in tool_calls:
@@ -313,40 +319,44 @@ class ChatAgent(Agent):
                 arguments = json.loads(arguments_str) if arguments_str else {}
                 tool = self.tool_map.get(tool_name)
                 if not tool:
-                    results.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": f"Tool {tool_name} not found",
-                        "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                    })
+                    msg = Message(
+                        role=Role.TOOL,
+                        content=f"Tool {tool_name} not found",
+                        tool_call_id=tool_call.id,
+                        name=tool_name
+                    )
+                    results.append(msg.to_dict())
                     continue
-                start_time = time.time()
                 result = await asyncio.wait_for(tool.execute(arguments), timeout=10.0)
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": str(result),
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=str(result),
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except json.JSONDecodeError:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Invalid arguments JSON: {arguments_str}",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Invalid arguments JSON: {arguments_str}",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except asyncio.TimeoutError:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Tool execution timed out after 10 seconds",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Tool execution timed out after 10 seconds",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
             except Exception as e:
-                results.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": f"Tool execution failed: {str(e)}",
-                    "tool_call_id": tool_call.id or f"unknown_{id(tool_call)}"
-                })
+                msg = Message(
+                    role=Role.TOOL,
+                    content=f"Tool execution failed: {str(e)}",
+                    tool_call_id=tool_call.id,
+                    name=tool_name
+                )
+                results.append(msg.to_dict())
         return results

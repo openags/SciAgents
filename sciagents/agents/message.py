@@ -3,71 +3,80 @@ from pydantic import BaseModel, Field, ValidationError
 from enum import Enum
 
 class Role(str, Enum):
-    """消息角色枚举，定义标准角色类型"""
+    """Role enumeration for message types."""
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
-    TOOL = "tool"  # 支持工具调用场景
+    TOOL = "tool"  # For tool call scenarios
 
 class ToolCall(BaseModel):
-    """工具调用结构"""
+    """Tool call structure, function field supports dict or str (OpenAI compatible)."""
     id: str
-    function: str
-    arguments: Dict[str, Any] = {}
-    result: Optional[Dict[str, Any]] = None  # 工具调用结果（可选）
+    function: Union[str, Dict[str, Any]]  # Compatible with OpenAI format
+    arguments: Optional[Dict[str, Any]] = None  # Optional, not required if function is dict
+    result: Optional[Dict[str, Any]] = None  # Optional tool call result
 
 class Message(BaseModel):
-    """单条消息格式"""
-    role: Role = Field(..., description="消息角色，如 user, assistant, system")
-    content: str = Field(..., description="消息内容")
-    tool_calls: Optional[List[ToolCall]] = Field(None, description="工具调用列表（可选）")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="附加元数据（可选）")
+    """Single message format, tool_calls compatible with OpenAI format."""
+    role: Role = Field(..., description="Message role, e.g. user, assistant, system")
+    content: str = Field(..., description="Message content")
+    name : Optional[str] = Field(None, description="Name of the assistant (optional)")
+    tool_call_id: Optional[str] = Field(None, description="Tool call ID (optional, for tool messages)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata (optional)")
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为 OpenAI 格式的字典"""
-        result = {"role": self.role.value, "content": self.content}
-        if self.tool_calls:
-            result["tool_calls"] = [tc.dict() for tc in self.tool_calls]
+        """Convert to OpenAI-compatible dict. Function field is pass-through. For tool messages, auto-add tool_call_id."""
+        result = {"role": self.role.value, "name": self.name, "content": self.content}
+
+        if self.role == Role.TOOL:
+            result["tool_call_id"] = self.tool_call_id
+
         if self.metadata:
             result["metadata"] = self.metadata
         return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Message":
-        """从字典创建 Message 实例"""
+        """Create a Message instance from a dict, compatible with function as dict."""
         try:
             role = Role(data.get("role"))
             content = data.get("content", "")
-            tool_calls = [ToolCall(**tc) for tc in data.get("tool_calls", [])] if data.get("tool_calls") else None
-            metadata = data.get("metadata")
-            return cls(role=role, content=content, tool_calls=tool_calls, metadata=metadata)
+
+            if role == Role.TOOL:
+                 tool_call_id = data.get("tool_call_id")
+
+            if data.get("metadata"):
+                metadata = data.get("metadata")
+
+            return cls(role=role, content=content, tool_call_id=tool_call_id, metadata=metadata)
+        
         except Exception as e:
             raise ValidationError(f"Invalid message format: {e}")
 
 class AgentInput(BaseModel):
-    """Agent 输入格式"""
-    messages: List[Message] = Field(..., description="消息列表")
-    context: Optional[Dict[str, Any]] = Field(None, description="额外上下文信息（可选）")
+    """Agent input format."""
+    messages: List[Message] = Field(..., description="List of messages")
+    context: Optional[Dict[str, Any]] = Field(None, description="Additional context (optional)")
 
     def to_dict_list(self) -> List[Dict[str, Any]]:
-        """转换为 OpenAI 格式的消息字典列表"""
+        """Convert to a list of OpenAI-compatible message dicts."""
         return [msg.to_dict() for msg in self.messages]
 
 class AgentOutput(BaseModel):
-    """Agent 输出格式"""
-    content: Union[str, Generator, AsyncGenerator] = Field(..., description="输出内容（字符串或生成器）")
-    tool_calls: Optional[List[ToolCall]] = Field(None, description="工具调用结果（可选）")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="附加元数据（可选）")
+    """Agent output format."""
+    content: Union[str, Generator, AsyncGenerator] = Field(..., description="Output content (string or generator)")
+    tool_calls: Optional[List[Union[ToolCall, Dict[str, Any]]]] = Field(None, description="Tool call results (optional)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata (optional)")
 
     class Config:
         arbitrary_types_allowed = True
 
     @classmethod
-    def from_string(cls, content: str, tool_calls: Optional[List[ToolCall]] = None, metadata: Optional[Dict[str, Any]] = None) -> "AgentOutput":
-        """从字符串创建 AgentOutput"""
+    def from_string(cls, content: str, tool_calls: Optional[List[Union[ToolCall, Dict[str, Any]]]] = None, metadata: Optional[Dict[str, Any]] = None) -> "AgentOutput":
+        """Create AgentOutput from a string."""
         return cls(content=content, tool_calls=tool_calls, metadata=metadata)
 
     @classmethod
-    def from_generator(cls, generator: Union[Generator, AsyncGenerator], tool_calls: Optional[List[ToolCall]] = None, metadata: Optional[Dict[str, Any]] = None) -> "AgentOutput":
-        """从生成器创建 AgentOutput"""
+    def from_generator(cls, generator: Union[Generator, AsyncGenerator], tool_calls: Optional[List[Union[ToolCall, Dict[str, Any]]]] = None, metadata: Optional[Dict[str, Any]] = None) -> "AgentOutput":
+        """Create AgentOutput from a generator."""
         return cls(content=generator, tool_calls=tool_calls, metadata=metadata)

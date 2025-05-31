@@ -68,3 +68,7 @@ else:
 ## License
 
 This project is licensed under the MIT License.
+
+## Acknowledgement
+
+This repository is inspired by [CAMEL: Communicative Agents for "Mind" Exploration of Large Scale Language Model Society](https://github.com/camel-ai/camel). We thank the CAMEL team for their open-source contributions.
