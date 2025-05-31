@@ -1,83 +1,112 @@
-from __future__ import annotations
-
-import functools
-import inspect
-from typing import Any, Callable, List, Optional
-
-from mcp.server.fastmcp import FastMCP
-
-from ..base_tool import BaseToolkit
-
+from typing import Literal, Any
+from sciagents.tools.base_tool import BaseToolkit
 
 class MCPServer:
-    """装饰器：把类/Toolkit 的一组方法注册进 FastMCP Server。
-    
-    将一个普通的工具类转换为 MCP 服务器。可以通过两种方式使用：
-    1. 指定 function_names 参数，明确列出要注册的方法名称
-    2. 对于继承了 BaseToolkit 的类，会自动注册 get_tools() 返回的所有工具
-    
-    装饰后的类实例将拥有 mcp 属性，可以通过 inst.mcp.run() 启动服务器。
+    """
+    A wrapper for running a BaseToolkit as an MCP server.
+    This class uses the underlying MCP server functionality
+    presumably available in the BaseToolkit.
     """
 
-    def __init__(
-        self,
-        function_names: Optional[List[str]] = None,
-        server_name: Optional[str] = None,
-    ) -> None:
-        self.function_names = function_names
-        self.server_name = server_name
+    def __init__(self, toolkit: BaseToolkit):
+        """
+        Initializes the MCPServer with a toolkit.
 
-    # ------------------------------------------------------------------
-    def _wrap(self, fn: Callable[..., Any]):
-        """保持签名 + 支持 async 的薄包装，供 FastMCP introspect。"""
-        if inspect.iscoroutinefunction(fn):
+        Args:
+            toolkit: An instance of BaseToolkit whose tools will be exposed.
+        """
+        if not isinstance(toolkit, BaseToolkit):
+            raise TypeError("toolkit must be an instance of BaseToolkit")
+        self.toolkit = toolkit
 
-            @functools.wraps(fn)
-            async def wrapper(*args, **kwargs):
-                return await fn(*args, **kwargs)
-        else:
+    def run(self, mode: Literal["stdio", "sse", "streamable-http"] = "stdio", **kwargs: Any) -> None:
+        """
+        Runs the MCP server for the toolkit.
 
-            @functools.wraps(fn)
-            def wrapper(*args, **kwargs):
-                return fn(*args, **kwargs)
+        Args:
+            mode: The mode to run the MCP server in.
+                  Supported modes depend on the BaseToolkit's implementation.
+            **kwargs: Additional arguments to pass to the toolkit's run_mcp_server method.
+        """
+        if not hasattr(self.toolkit, "run_mcp_server"):
+            raise NotImplementedError(
+                "The provided toolkit does not have a run_mcp_server method."
+            )
 
-        wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
-        return wrapper
+        # Assuming self.toolkit.run_mcp_server is a method that exists
+        # based on the initial exploration of base_tool.py
+        self.toolkit.run_mcp_server(mode=mode, **kwargs)
 
-    # ------------------------------------------------------------------
-    def __call__(self, cls):
-        """Decorate class: init 时注入 FastMCP 并注册方法。"""
+if __name__ == '__main__':
+    # This is a conceptual example of how MCPServer might be used.
+    # It requires a concrete BaseToolkit implementation and assumes FastMCP is available.
 
-        orig_init = cls.__init__
+    # --- Mockups for demonstration ---
+    class MyTool:
+        def __init__(self, name, description):
+            self.name = name
+            self.description = description
+            self.parameters = {"type": "object", "properties": {}}
+        def to_openai_schema(self):
+            return {
+                "type": "function",
+                "function": {
+                    "name": self.name,
+                    "description": self.description,
+                    "parameters": self.parameters
+                }
+            }
+        def get_function_name(self):
+            return self.name
 
-        def new_init(inst, *args, **kwargs):
-            orig_init(inst, *args, **kwargs)
-            inst.mcp = FastMCP(self.server_name or cls.__name__)
-
-            fn_names = self.function_names
-            if fn_names is None:
-                if isinstance(inst, BaseToolkit):
-                    fn_names = [t.get_function_name() for t in inst.get_tools()]
-                else:
-                    raise ValueError("function_names 为空且类未继承 BaseToolkit")
-
-            for name in fn_names:
-                fn = getattr(inst, name, None)
-                if fn is None or not callable(fn):
-                    raise ValueError(f"{name} 不存在或不可调用")
-                inst.mcp.tool(name=name)(self._wrap(fn))
+    class MyToolkit(BaseToolkit):
+        def __init__(self):
+            super().__init__() # Important if BaseToolkit.__init__ does something
+            self._tools = [
+                MyTool(name="get_weather", description="Get current weather"),
+                MyTool(name="send_email", description="Send an email")
+            ]
+            # Mock the mcp and run_mcp_server for this example to be runnable standalone
+            class MockFastMCP:
+                def run(self, mode, **kwargs):
+                    print(f"Mock FastMCP server running in '{mode}' mode with tools:")
+                    for tool in self._toolkit_ref.get_tools():
+                        print(f"  - {tool.get_function_name()}: {tool.description}")
+                    print("kwargs received:", kwargs)
+                    print("MCP Server mockup finished.")
             
-            # 添加 run_mcp_server 方法，与 BaseToolkit 接口保持一致
-            def run_mcp_server(self_inst, mode="stdio"):
-                """启动 MCP 服务器。
-                
-                Args:
-                    mode: 服务器运行模式，可以是 "stdio", "sse", 或 "streamable-http"
-                """
-                self_inst.mcp.run(mode=mode)
-            
-            # 为实例添加运行方法
-            inst.run_mcp_server = run_mcp_server.__get__(inst)
+            self.mcp_server_impl = MockFastMCP()
+            self.mcp_server_impl._toolkit_ref = self # Give mock MCP a reference back
 
-        cls.__init__ = new_init
-        return cls
+        def get_tools(self):
+            return self._tools
+
+        def run_mcp_server(self, mode: str, **kwargs: Any) -> None:
+            print(f"MyToolkit: Delegating to run_mcp_server with mode={mode}")
+            # In a real scenario, this would call the actual FastMCP instance's run method
+            # self.mcp.run(mode, **kwargs)
+            # For this example, we use the mock implementation
+            self.mcp_server_impl.run(mode=mode, **kwargs)
+
+    # --- Example Usage ---
+    print("Starting MCPServer example...")
+    my_toolkit_instance = MyToolkit()
+
+    # The MCPServer is intended to wrap a BaseToolkit.
+    # The BaseToolkit itself has the run_mcp_server method.
+    # So, the MCPServer's run method will call my_toolkit_instance.run_mcp_server()
+
+    mcp_server = MCPServer(toolkit=my_toolkit_instance)
+
+    try:
+        print("Attempting to run MCPServer...")
+        # This will in turn call my_toolkit_instance.run_mcp_server("stdio", example_arg="hello")
+        mcp_server.run(mode="stdio", example_arg="hello")
+        print("MCPServer example finished.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    # Example of direct usage (which MCPServer is a wrapper for)
+    # print("\nAttempting to run toolkit's server directly...")
+    # my_toolkit_instance.run_mcp_server(mode="sse")
+    # print("Toolkit's server direct run finished.")

@@ -1,222 +1,204 @@
-from __future__ import annotations
+import httpx
+from typing import List, Dict, Any, Optional
+from sciagents.tools.mcp_tool.toolkit import MCPTool
+import json # For potential error parsing if response is not json
 
-import inspect
-import json
-import os
-import shlex
-from contextlib import AsyncExitStack, asynccontextmanager
-from datetime import timedelta
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Set,
-    Union,
-    cast,
-)
-from urllib.parse import urlparse
+class MCPClient:
+    """
+    Client for interacting with an MCP (Message Control Protocol) server.
+    It can list available tools and execute them remotely.
 
-from ..base_tool import BaseToolkit
-from ..function_tool import FunctionTool
+    Assumes the MCP server exposes HTTP endpoints for:
+    - Listing tools (e.g., GET /tools)
+    - Executing tools (e.g., POST /execute_tool)
+    """
 
-# SciAgents provides run_async (can be implemented by user), here is a simple version
-import asyncio
+    def __init__(self, base_url: str):
+        """
+        Initializes the MCPClient.
 
-def run_async(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+        Args:
+            base_url: The base URL of the MCP server (e.g., "http://localhost:8000").
+        """
+        if not base_url.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        self.base_url = base_url.rstrip('/')
+        self._sync_client = httpx.Client()
+        self._async_client = httpx.AsyncClient()
 
-# ---------------------------------------------------------------------------
-if TYPE_CHECKING:
-    from mcp import ClientSession, Tool, ListToolsResult
+    def _parse_tool_list_response(self, response_json: Any) -> List[MCPTool]:
+        if not isinstance(response_json, list):
+            raise ValueError("Invalid response format for tool list: expected a list.")
 
-import logging
-logger = logging.getLogger("sciagents.mcpclient")
+        tools = []
+        for tool_schema_wrapper in response_json:
+            if not isinstance(tool_schema_wrapper, dict) or "function" not in tool_schema_wrapper:
+                print(f"Skipping invalid tool schema wrapper: {tool_schema_wrapper}")
+                continue
 
+            tool_schema = tool_schema_wrapper.get("function", {})
+            if not tool_schema.get("name") or not tool_schema.get("description"):
+                print(f"Skipping tool with missing name or description: {tool_schema}")
+                continue
 
-class MCPClient(BaseToolkit):
-    """Establishes a connection to a single MCP Server and dynamically generates FunctionTool instances."""
+            tools.append(
+                MCPTool(
+                    name=tool_schema["name"],
+                    description=tool_schema["description"],
+                    parameters=tool_schema.get("parameters", {"type": "object", "properties": {}}),
+                )
+            )
+        return tools
 
-    def __init__(
-        self,
-        command_or_url: str,
-        args: Optional[List[str]] = None,
-        env: Optional[Dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        headers: Optional[Dict[str, str]] = None,
-        mode: Optional[str] = None,
-        strict: bool = False,
-    ) -> None:
-        super().__init__(timeout=timeout or 10.0)
+    def list_tools(self) -> List[MCPTool]:
+        """
+        Fetches the list of available tools from the MCP server.
 
-        # Save parameters
-        self.command_or_url = command_or_url
-        self.args = args or []
-        self.env = env or {}
-        self.headers = headers or {}
-        self.mode = mode
-        self.strict = strict
+        Returns:
+            A list of MCPTool instances.
 
-        # Runtime attributes
-        self._mcp_tools: List["Tool"] = []
-        self._session: Optional["ClientSession"] = None
-        self._exit_stack = AsyncExitStack()
-        self._connected = False
-
-    # ------------------------------------------------------------------
-    async def connect(self):
-        """Establish connection and retrieve remote tool list."""
-        from mcp.client.session import ClientSession
-        from mcp.client.sse import sse_client
-        from mcp.client.stdio import StdioServerParameters, stdio_client
-        from mcp.client.streamable_http import streamablehttp_client
-
-        if self._connected:
-            logger.warning("Already connected")
-            return self
-
+        Raises:
+            httpx.HTTPStatusError: If the server returns an error status.
+            ValueError: If the response format is invalid.
+        """
         try:
-            # 1) Select channel
-            if urlparse(self.command_or_url).scheme in ("http", "https"):
-                if self.mode in (None, "sse"):
-                    read_stream, write_stream = await self._exit_stack.enter_async_context(
-                        sse_client(self.command_or_url, headers=self.headers, timeout=self.timeout)
-                    )
-                elif self.mode == "streamable-http":
-                    read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
-                        streamablehttp_client(
-                            self.command_or_url,
-                            headers=self.headers,
-                            timeout=timedelta(seconds=self.timeout) if self.timeout else None,
-                        )
-                    )
-                else:
-                    raise ValueError(f"Unsupported mode {self.mode} for HTTP url")
-            else:
-                # stdio local executable
-                command = self.command_or_url
-                arguments = self.args
-                if not arguments:
-                    argv = shlex.split(command)
-                    command, arguments = argv[0], argv[1:]
-                if os.name == "nt" and command.lower() == "npx":
-                    command = "npx.cmd"
-                server_params = StdioServerParameters(command=command, args=arguments, env={**os.environ, **self.env})
-                read_stream, write_stream = await self._exit_stack.enter_async_context(stdio_client(server_params))
+            response = self._sync_client.get(f"{self.base_url}/tools")
+            response.raise_for_status()  # Raise an exception for bad status codes
+            return self._parse_tool_list_response(response.json())
+        except httpx.RequestError as e:
+            raise ConnectionError(f"Failed to connect to MCP server at {self.base_url}/tools: {e}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to decode JSON response from {self.base_url}/tools: {e}")
 
-            # 2) Create session
-            self._session = await self._exit_stack.enter_async_context(
-                ClientSession(read_stream, write_stream, timedelta(seconds=self.timeout) if self.timeout else None)
-            )
-            await self._session.initialize()
 
-            # 3) Fetch remote tools
-            list_tools_result = await self._session.list_tools()
-            self._mcp_tools = list_tools_result.tools  # type: ignore[attr-defined]
-            self._connected = True
-            return self
-        except Exception as e:
-            await self.disconnect()
-            logger.error(f"Connect MCP failed: {e}")
-            raise e
+    async def a_list_tools(self) -> List[MCPTool]:
+        """
+        Asynchronously fetches the list of available tools from the MCP server.
 
-    def connect_sync(self):
-        return run_async(self.connect())
+        Returns:
+            A list of MCPTool instances.
 
-    # ------------------------------------------------------------------
-    async def disconnect(self):
-        if not self._connected:
-            return
-        self._connected = False
-        await self._exit_stack.aclose()
-        self._exit_stack = AsyncExitStack()
-        self._session = None
-
-    # ------------------------------------------------------------------
-    @asynccontextmanager
-    async def connection(self):
+        Raises:
+            httpx.HTTPStatusError: If the server returns an error status.
+            ValueError: If the response format is invalid.
+        """
         try:
-            await self.connect()
-            yield self
-        finally:
-            await self.disconnect()
+            response = await self._async_client.get(f"{self.base_url}/tools")
+            response.raise_for_status()
+            return self._parse_tool_list_response(response.json())
+        except httpx.RequestError as e:
+            raise ConnectionError(f"Failed to connect to MCP server at {self.base_url}/tools: {e}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to decode JSON response from {self.base_url}/tools: {e}")
 
-    # ------------------------------------------------------------------
-    # Convert remote Tool description to dynamic async function
-    # ------------------------------------------------------------------
-    def generate_function_from_mcp_tool(self, mcp_tool: "Tool") -> Callable:
-        func_name = mcp_tool.name
-        func_desc = mcp_tool.description or "No description provided."
-        schema_props = mcp_tool.inputSchema.get("properties", {})
-        required_params = mcp_tool.inputSchema.get("required", [])
+    def _parse_execute_response(self, response_json: Any) -> Any:
+        if not isinstance(response_json, dict):
+            raise ValueError("Invalid response format for tool execution: expected a dictionary.")
 
-        # Build Python type hints
-        type_map = {
-            "string": str,
-            "integer": int,
-            "number": float,
-            "boolean": bool,
-            "array": list,
-            "object": dict,
-        }
-        annotations: Dict[str, Any] = {}
-        defaults: Dict[str, Any] = {}
-        for pname, p_schema in schema_props.items():
-            annotations[pname] = type_map.get(p_schema.get("type", "string"), str)
-            if pname not in required_params:
-                defaults[pname] = None
+        if "error" in response_json:
+            raise RuntimeError(f"MCP tool execution failed: {response_json['error']}")
+        if "result" not in response_json:
+            # Fallback if 'result' is not present but no 'error' either
+            # This depends on the server's response contract
+            # For now, we assume 'result' should be there on success
+            raise ValueError("Invalid response format for tool execution: 'result' key missing.")
+        return response_json["result"]
 
-        async def _dynamic(**kwargs) -> str:
-            from mcp.types import CallToolResult  # import requires mcp installed
+    def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """
+        Executes a tool remotely on the MCP server.
 
-            missing = set(required_params) - kwargs.keys()
-            if missing:
-                return f"Missing required params: {missing}"
-            if not self._session:
-                raise RuntimeError("MCPClient not connected")
-            result: CallToolResult = await self._session.call_tool(func_name, kwargs)
-            if not result.content:
-                return "<empty>"
-            content = result.content[0]
-            return getattr(content, "text", str(content))
+        Args:
+            tool_name: The name of the tool to execute.
+            arguments: A dictionary of arguments for the tool.
 
-        _dynamic.__name__ = func_name
-        _dynamic.__doc__ = func_desc
-        _dynamic.__annotations__ = annotations
-        params = [
-            inspect.Parameter(
-                name=p,
-                kind=inspect.Parameter.KEYWORD_ONLY,
-                default=defaults.get(p, inspect.Parameter.empty),
-                annotation=annotations[p],
-            )
-            for p in schema_props.keys()
-        ]
-        _dynamic.__signature__ = inspect.Signature(parameters=params)  # type: ignore[attr-defined]
-        return _dynamic
+        Returns:
+            The result of the tool execution.
 
-    # ------------------------------------------------------------------
-    def _build_tool_schema(self, mcp_tool: "Tool") -> Dict[str, Any]:
-        input_schema = mcp_tool.inputSchema
-        return {
-            "type": "function",
-            "function": {
-                "name": mcp_tool.name,
-                "description": mcp_tool.description or "No description provided.",
-                "parameters": input_schema,
-                "strict": self.strict,
-            },
-        }
+        Raises:
+            httpx.HTTPStatusError: If the server returns an error status.
+            RuntimeError: If the tool execution on the server side returns an error.
+            ValueError: If the response format is invalid.
+        """
+        payload = {"tool_name": tool_name, "arguments": arguments}
+        try:
+            response = self._sync_client.post(f"{self.base_url}/execute", json=payload) # Changed to /execute
+            response.raise_for_status()
+            return self._parse_execute_response(response.json())
+        except httpx.RequestError as e:
+            raise ConnectionError(f"Failed to connect to MCP server at {self.base_url}/execute: {e}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to decode JSON response from {self.base_url}/execute: {e}")
 
-    # ------------------------------------------------------------------
-    def get_tools(self):
-        return [
-            FunctionTool(
-                self.generate_function_from_mcp_tool(t),
-                openai_tool_schema=self._build_tool_schema(t),
-            )
-            for t in self._mcp_tools
-        ]
+
+    async def a_execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """
+        Asynchronously executes a tool remotely on the MCP server.
+
+        Args:
+            tool_name: The name of the tool to execute.
+            arguments: A dictionary of arguments for the tool.
+
+        Returns:
+            The result of the tool execution.
+
+        Raises:
+            httpx.HTTPStatusError: If the server returns an error status.
+            RuntimeError: If the tool execution on the server side returns an error.
+            ValueError: If the response format is invalid.
+        """
+        payload = {"tool_name": tool_name, "arguments": arguments}
+        try:
+            response = await self._async_client.post(f"{self.base_url}/execute", json=payload) # Changed to /execute
+            response.raise_for_status()
+            return self._parse_execute_response(response.json())
+        except httpx.RequestError as e:
+            raise ConnectionError(f"Failed to connect to MCP server at {self.base_url}/execute: {e}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to decode JSON response from {self.base_url}/execute: {e}")
+
+    def close(self):
+        """Closes the underlying HTTP clients. Should be called when the client is no longer needed."""
+        self._sync_client.close()
+        # For async client, it's better to use 'async with' block or call aclose manually
+        # httpx.AsyncClient.aclose() is an async method.
+        # This simple close method might not be sufficient if used heavily outside 'async with'.
+
+    async def aclose(self):
+        """Asynchronously closes the underlying HTTP clients."""
+        await self._async_client.aclose()
+
+# Example of how the server might provide /tools (conceptual)
+# This would be part of the MCPServer/FastMCP implementation
+# GET /tools response:
+# [
+#   {
+#     "type": "function",
+#     "function": {
+#       "name": "get_weather",
+#       "description": "Get the current weather in a given location",
+#       "parameters": {
+#         "type": "object",
+#         "properties": {
+#           "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"}
+#         },
+#         "required": ["location"]
+#       }
+#     }
+#   }
+# ]
+
+# Example of how the server might provide /execute (conceptual)
+# POST /execute request body:
+# {
+#   "tool_name": "get_weather",
+#   "arguments": {"location": "Tokyo"}
+# }
+# POST /execute response body (success):
+# {
+#   "result": {"temperature": "15 C", "condition": "Cloudy"}
+# }
+# POST /execute response body (error):
+# {
+#   "error": "Invalid location format"
+# }

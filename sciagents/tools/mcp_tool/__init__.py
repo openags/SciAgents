@@ -1,6 +1,9 @@
-# Re-export MCP components
-from .client import MCPClient
+from .toolkit import MCPTool
 from .server import MCPServer
-from .toolkit import MCPToolkit
+from .client import MCPClient
 
-__all__ = ["MCPClient", "MCPServer", "MCPToolkit"]
+__all__ = [
+    "MCPTool",
+    "MCPServer",
+    "MCPClient",
+]
